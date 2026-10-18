@@ -1,81 +1,162 @@
 # SentimentAutomated
 
-**SentimentAutomated** is a high-performance sentiment analysis tool that processes text-based datasets such as tweets, reviews, or user feedback. It classifies content into **Positive**, **Neutral**, and **Negative** sentiments using the RoBERTa model trained on Twitter data. The tool is designed for both quick sampling and full-scale analysis, generating clear CSV outputs and a rich multi-page PDF report with insightful visualizations.
+A live sentiment-monitoring pipeline - ingest, score, store, alert - not a one-shot "CSV in, PDF
+out" script. Built around the same RoBERTa model the original project used, reshaped into
+something that actually runs continuously instead of once per manual invocation.
 
----
+## Why this exists
 
-## Features
+The original version of this project worked (score a CSV, print a PDF), but it wasn't a
+pipeline - no storage, no live data, no concept of "this topic is trending negative right now."
+This rework keeps the model and the core idea, and builds the actual infrastructure around it:
+a quality gate, a real datastore, topic tagging, multi-source ingestion, and threshold-based
+alerting.
 
-- Uses `cardiffnlp/twitter-roberta-base-sentiment` transformer model
-- Generates a detailed PDF report including:
-  - Bar Chart, Pie Chart, Donut Chart
-  - Word Clouds by sentiment
-  - Confidence Scatter Plot and Box Plot
-  - Correlation Heatmap
-  - Stacked Bar Chart by data chunks
-- Outputs prediction confidence for each row
-- GPU acceleration using CUDA (required for full performance)
-- Two script options:
-  - `sentiment_limited.py`: Processes 5000-row sample
-  - `sentiment.py`: Processes the full dataset
+## Screenshots
 
----
+**Home** - real stats and live alerts pulled straight from the SQLite store:
 
-## Folder Structure
+![Home tab](screenshots/home.png)
 
-sentiment_limited.py
-→ Analyzes a 5000-row sample from the dataset
+**Dashboard** - sentiment by topic, recent posts, and a PDF export:
 
-sentiment.py
-→ Processes the entire dataset without sampling
+![Dashboard tab](screenshots/dashboard.png)
 
-results.csv
-→ Contains sentiment predictions and confidence scores for each entry
+## How it works
 
-report.pdf
-→ Multi-page PDF report with charts, plots, and summary
+```
+ingest (Reddit / NewsAPI / batch CSV)
+   -> quality gate (dedupe, reject empty/non-English, truncate)
+   -> sentiment scoring (RoBERTa, batched)
+   -> topic tagging
+   -> SQLite store
+   -> dashboard + alerts
+```
 
-README.md
-→ Documentation and usage instructions for the project
+**Ingest** (`ingest.py`, `news.py`) - live Reddit posts/comments via `praw`, or news headlines via
+NewsAPI, for a tracked topic. The original static `twitter_training.csv` isn't deleted - it's
+kept as a "batch mode" input, and also powers the **Try It** tab's live demo so the project works
+immediately without API credentials.
 
-.gitignore
-→ Ensures virtual environments and unnecessary files are not tracked by Git
+**Quality gate** (`quality.py`) - dedupes by post ID, rejects empty/near-empty text, rejects
+non-English text (`langdetect`), truncates long text instead of erroring. Every rejection is
+logged with a reason, not silently dropped - the same validate/reject-and-log pattern used in the
+data-infra-learn flagship project.
 
-## Requirements
+**Scoring** (`process.py`) - `cardiffnlp/twitter-roberta-base-sentiment`, run in real batches
+through the tokenizer rather than one row at a time (the original two scripts' loop defeated the
+point of GPU acceleration entirely).
 
-Install dependencies:
+**Topic tagging** (`topics.py`) - a fixed keyword match for live ingestion (you already know
+what you're tracking), or spaCy noun-chunk extraction for exploring what a batch of text is
+actually about with no predefined topic list.
 
-pip install torch transformers pandas matplotlib seaborn tqdm wordcloud
+**Storage** (`store.py`) - SQLite, append-only. Running ingestion again just adds new posts;
+re-ingesting the same post is a no-op, not a duplicate row.
 
-## Note
-Ensure you have a CUDA-enabled GPU and the correct version of PyTorch installed with GPU support. This project will not run efficiently without CUDA.
+**Alerting** (`alerts.py`) - if a topic's negative-sentiment share crosses a threshold within a
+rolling window, it surfaces as an active alert on the dashboard.
 
-## Run
-python sentiment_limited.py   # For quick 5000-row sample analysis
-python sentiment.py           # For full dataset analysis
+## A real validation finding
 
+The CSV this project ships with (`twitter_training.csv`) happens to include its own human-labeled
+ground truth. Scoring 1,000 random rows and comparing against that ground truth (excluding the
+dataset's "Irrelevant" label, which isn't in the model's 3-class output space):
 
-## You will be prompted to:
+**62.8% agreement with human labels**, on 831 comparable rows.
 
-Enter the path to your CSV file
+That's a real, useful number: `cardiffnlp/twitter-roberta-base-sentiment` was trained on general
+Twitter data, not gaming/tech-entity tweets specifically, so a meaningful chunk of disagreement
+with ground truth here is expected, not a bug. It's reported honestly rather than assumed away.
 
-Specify the column containing the text for analysis
+## What the quality gate actually caught
 
-## Outputs
-results.csv: Predictions and confidence scores
+Running the gate on real samples of the bundled dataset: **most rejections were duplicate post
+IDs**, not junk text - this specific Kaggle dataset includes multiple paraphrased variants of the
+same tweet sharing one Tweet ID (a side effect of how the dataset was built for data
+augmentation). The dedup logic catches this correctly; on a random cross-section it was closer to
+even between duplicates, non-English text, and empty/near-empty text.
 
-report.pdf: Multi-page visual summary of sentiment analysis
+## Setup
 
-## Results 
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+python3 -m spacy download en_core_web_sm
+```
 
-![Page_1_Analysis](results_images/Page1(Analysis).png)
-![Page_2_Analysis](results_images/sentimentCount.png)
-![Page_3_Analysis](results_images/sentimentProportion.png)
-![Page_4_Analysis](results_images/sentimentDonut.png)
-![Page_5_Analysis](results_images/confidenceScatter.png)
-![Page_6_Analysis](results_images/corrHeat.png)
-![Page_7_Analysis](results_images/negCloud.png)
-![Page_8_Analysis](results_images/posCloud.png)
-![Page_9_Analysis](results_images/sentChunk.png)
+**For live Reddit/news ingestion** (optional - the Try It tab works without this):
 
+```bash
+cp .env.example .env
+# fill in REDDIT_CLIENT_ID / REDDIT_CLIENT_SECRET (free at reddit.com/prefs/apps, instant)
+# and optionally NEWSAPI_KEY (free at newsapi.org/register)
+```
 
+## Run it
+
+**Dashboard (recommended):**
+
+```bash
+streamlit run app.py
+```
+
+No credentials needed - the **Try It** tab ingests a live sample from the bundled dataset through
+the real pipeline, so the whole thing is interactive out of the box.
+
+**Live Reddit ingestion (needs `.env` credentials):**
+
+```bash
+python3 ingest.py <subreddit> [limit]          # one-off pull
+python3 scheduler.py <subreddit> <topic> [interval_seconds]   # runs continuously
+```
+
+**Score a CSV directly (the original script's interface, still available):**
+
+```bash
+python3 process.py
+```
+
+**Run the tests:**
+
+```bash
+pytest tests/
+```
+
+## Project structure
+
+```
+ingest.py       # Reddit ingestion + batch-CSV loader
+news.py          # NewsAPI ingestion (second source)
+quality.py        # data quality gate (dedupe/reject/truncate), logs every rejection
+process.py         # sentiment scoring (batched), replaces sentiment.py + sentiment_limited.py
+topics.py           # keyword tagging + spaCy noun-chunk extraction
+store.py             # SQLite storage
+alerts.py             # threshold-based negative-sentiment alerting
+pipeline.py            # ties ingest -> quality -> score -> tag -> store together
+scheduler.py             # runs the pipeline on an interval
+report.py                 # the original PDF report, now reading from the store (optional export)
+app.py                     # Streamlit dashboard (Home / Try It / Dashboard)
+twitter_training.csv        # bundled dataset - batch-mode input + Try It tab's demo data
+tests/                        # pytest coverage for quality/store/alerts/topics
+```
+
+## Limitations
+
+- Live Reddit/NewsAPI ingestion needs the user's own free API credentials - not runnable live
+  without them, though the Try It tab's batch-CSV path needs nothing
+- Topic tagging is a fixed keyword match or noun chunks, not real aspect-based sentiment analysis
+- The 62.8% ground-truth agreement reflects a domain mismatch (general Twitter vs. gaming/tech
+  entities), not a flaw in the pipeline itself - a domain-specific fine-tune would likely do
+  better, but that's out of scope here
+- The scheduler is a straightforward interval loop, not Kafka/Airflow-scale orchestration - a
+  deliberate choice, not an oversight, for a project at this scale
+
+## What I'd improve with more time
+
+- A real scheduled deployment (even a cheap always-on box) instead of running the scheduler
+  manually
+- Fine-tuning the sentiment model on a small labeled sample from the actual tracked topics, to
+  close some of the domain-mismatch gap found above
+- A proper aspect-based sentiment pass per topic, instead of one overall sentiment per post
