@@ -1,6 +1,11 @@
 # Ignore Python virtual environments
 venv/
 env/
+.venv/
+
+# SQLite store and pytest cache - regenerated locally
+*.db
+.pytest_cache/
 
 # Ignore Python cache
 __pycache__/
