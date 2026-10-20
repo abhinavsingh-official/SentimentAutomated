@@ -1,8 +1,8 @@
 """Streamlit dashboard for SentimentAutomated - reads from the SQLite
 store built by pipeline.py, rather than a one-shot CSV-in/PDF-out script.
 Includes a "Try it" tab that runs the real pipeline on a sample of the
-bundled Twitter dataset live, so the project is interactive even without
-Reddit/NewsAPI credentials configured."""
+bundled Twitter dataset, or a genuinely live pull from Hacker News, so the
+project is interactive with zero credentials configured."""
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -10,6 +10,7 @@ import streamlit as st
 
 import store
 from alerts import check_alerts
+from hn_ingest import fetch_hn_comments
 from pipeline import run_pipeline
 from process import SentimentModel
 from topics import top_noun_chunks
@@ -63,7 +64,8 @@ def home_tab():
         "CSV and print a PDF."
         "</p>"
         "<ul>"
-        "<li><b>Ingest</b> - Reddit posts/comments, news headlines, or a batch CSV</li>"
+        "<li><b>Ingest</b> - Hacker News comments live, Reddit/news headlines when configured, "
+        "or a batch CSV</li>"
         "<li><b>Score</b> - a RoBERTa model fine-tuned for sentiment, batched for real throughput</li>"
         "<li><b>Store</b> - SQLite, so history builds up instead of getting overwritten</li>"
         "<li><b>Alert</b> - flags a topic if its negative share crosses a threshold</li>"
@@ -109,8 +111,8 @@ def home_tab():
         st.markdown(
             '<div class="sa-feature-card"><h4>Try It</h4>'
             "<ul>"
-            "<li>Pick a topic from the bundled dataset and ingest a live sample</li>"
-            "<li>No Reddit/NewsAPI credentials needed for this demo path</li>"
+            "<li>A bundled-dataset sample, or a genuinely live pull from Hacker News</li>"
+            "<li>No credentials needed for either path</li>"
             "<li>Watch the pipeline accept/reject/score/store in real time</li>"
             "</ul></div>",
             unsafe_allow_html=True,
@@ -135,9 +137,9 @@ def home_tab():
 
 def try_it_tab():
     st.markdown(
-        '<p style="color:#7a655d;">Pulls a small batch from the bundled Twitter dataset for '
-        "the topic you pick, runs it through the real pipeline (quality gate -> sentiment "
-        "scoring -> storage), and shows you what happened at each stage.</p>",
+        '<p style="color:#7a655d;">Two ways to see the real pipeline run (quality gate -> '
+        "sentiment scoring -> storage): a quick sample from the bundled dataset, or a genuinely "
+        "live pull from Hacker News - both need zero credentials.</p>",
         unsafe_allow_html=True,
     )
 
@@ -153,25 +155,40 @@ def try_it_tab():
             f"{summary['stored']} newly stored (duplicates from a prior run are skipped)."
         )
 
-    col1, col2 = st.columns([2, 1])
-    with col1:
-        entity = st.selectbox("Topic", ENTITY_CHOICES)
-    with col2:
-        sample_size = st.number_input("Sample size", min_value=10, max_value=200, value=50, step=10)
+    source_choice = st.radio("Source", ["Bundled dataset (batch)", "Hacker News (live)"], horizontal=True)
 
-    if st.button("Ingest sample"):
-        with st.spinner(f"Ingesting and scoring {sample_size} posts about {entity}..."):
-            # load_batch_csv() treats a whole file as one topic, which isn't
-            # right here since this dataset covers many entities in one
-            # file - filter to the chosen entity first instead.
-            df = pd.read_csv("twitter_training.csv")
-            subset = df[df["Entity"] == entity].head(sample_size)
-            posts = [
-                {"post_id": str(r["Tweet ID"]), "text": str(r["Tweet"]), "topic": entity.lower(), "created_at": None}
-                for _, r in subset.iterrows()
-            ]
-            st.session_state["last_ingest_summary"] = run_pipeline(posts, source="batch_csv", model=load_model())
-        st.rerun()
+    if source_choice == "Bundled dataset (batch)":
+        col1, col2 = st.columns([2, 1])
+        with col1:
+            entity = st.selectbox("Topic", ENTITY_CHOICES)
+        with col2:
+            sample_size = st.number_input("Sample size", min_value=10, max_value=200, value=50, step=10)
+
+        if st.button("Ingest sample"):
+            with st.spinner(f"Ingesting and scoring {sample_size} posts about {entity}..."):
+                # load_batch_csv() treats a whole file as one topic, which
+                # isn't right here since this dataset covers many entities
+                # in one file - filter to the chosen entity first instead.
+                df = pd.read_csv("twitter_training.csv")
+                subset = df[df["Entity"] == entity].head(sample_size)
+                posts = [
+                    {"post_id": str(r["Tweet ID"]), "text": str(r["Tweet"]), "topic": entity.lower(), "created_at": None}
+                    for _, r in subset.iterrows()
+                ]
+                st.session_state["last_ingest_summary"] = run_pipeline(posts, source="batch_csv", model=load_model())
+            st.rerun()
+    else:
+        col1, col2 = st.columns([2, 1])
+        with col1:
+            query = st.text_input("Search Hacker News comments for", value="artificial intelligence")
+        with col2:
+            hn_sample_size = st.number_input("Sample size", min_value=10, max_value=100, value=50, step=10, key="hn_size")
+
+        if st.button("Ingest live from Hacker News"):
+            with st.spinner(f"Pulling live HN comments about '{query}'..."):
+                posts = fetch_hn_comments(query, topic=query.lower(), hits=hn_sample_size)
+                st.session_state["last_ingest_summary"] = run_pipeline(posts, source="hackernews", model=load_model())
+            st.rerun()
 
 
 def dashboard_tab():

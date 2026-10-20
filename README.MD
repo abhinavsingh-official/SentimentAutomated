@@ -18,17 +18,23 @@ alerting.
 
 ![Home tab](screenshots/home.png)
 
+**Try It, live** - a genuinely live pull from Hacker News, no credentials needed, run end to end
+through the real pipeline:
+
+![Try It tab, Hacker News source](screenshots/try_it_hn.png)
+
 **Dashboard** - sentiment by topic, a sentiment-over-time heatmap per topic, a correlation view
 showing whether two topics' sentiment trends move together, open-ended noun-phrase extraction
 (what people are actually saying, not just the fixed topic labels), what the quality gate
-rejected and why, and a PDF export:
+rejected and why, and a PDF export - shown here with real data from the live Hacker News pull
+above, spanning real comment timestamps from the last several days:
 
 ![Dashboard tab](screenshots/dashboard.png)
 
 ## How it works
 
 ```
-ingest (Reddit / NewsAPI / batch CSV)
+ingest (Hacker News / Reddit / NewsAPI / batch CSV)
    -> quality gate (dedupe, reject empty/non-English, truncate)
    -> sentiment scoring (RoBERTa, batched)
    -> topic tagging
@@ -36,10 +42,14 @@ ingest (Reddit / NewsAPI / batch CSV)
    -> dashboard + alerts
 ```
 
-**Ingest** (`ingest.py`, `news.py`) - live Reddit posts/comments via `praw`, or news headlines via
-NewsAPI, for a tracked topic. The original static `twitter_training.csv` isn't deleted - it's
-kept as a "batch mode" input, and also powers the **Try It** tab's live demo so the project works
-immediately without API credentials.
+**Ingest** (`hn_ingest.py`, `ingest.py`, `news.py`) - **Hacker News is the default live source**
+(`hn_ingest.py`, via Algolia's public HN search API - no key, no registration, no approval, works
+immediately). Reddit ingestion (`ingest.py`, via `praw`) is still supported for anyone with API
+access, but isn't the default anymore - Reddit's app registration moved to a manual-approval
+process partway through this project's build (previously instant self-serve; confirmed directly
+by trying it), so a source that actually works out of the box took priority. NewsAPI (`news.py`)
+remains available as a third option. The original static `twitter_training.csv` isn't deleted -
+it's kept as a "batch mode" input, and both it and the live HN path power the **Try It** tab.
 
 **Quality gate** (`quality.py`) - dedupes by post ID, rejects empty/near-empty text, rejects
 non-English text (`langdetect`), truncates long text instead of erroring. Every rejection is
@@ -89,11 +99,13 @@ pip install -r requirements.txt
 python3 -m spacy download en_core_web_sm
 ```
 
-**For live Reddit/news ingestion** (optional - the Try It tab works without this):
+**For Reddit/NewsAPI ingestion** (optional - Hacker News and the bundled dataset both work with
+zero setup):
 
 ```bash
 cp .env.example .env
-# fill in REDDIT_CLIENT_ID / REDDIT_CLIENT_SECRET (free at reddit.com/prefs/apps, instant)
+# fill in REDDIT_CLIENT_ID / REDDIT_CLIENT_SECRET if you have Reddit API access
+# (reddit.com/prefs/apps - now a manual-approval process, no longer instant)
 # and optionally NEWSAPI_KEY (free at newsapi.org/register)
 ```
 
@@ -105,14 +117,21 @@ cp .env.example .env
 streamlit run app.py
 ```
 
-No credentials needed - the **Try It** tab ingests a live sample from the bundled dataset through
-the real pipeline, so the whole thing is interactive out of the box.
+No credentials needed - the **Try It** tab can ingest either a sample from the bundled dataset or
+a genuinely live pull from Hacker News, both through the real pipeline.
 
-**Live Reddit ingestion (needs `.env` credentials):**
+**Live Hacker News ingestion (no credentials needed):**
 
 ```bash
-python3 ingest.py <subreddit> [limit]          # one-off pull
-python3 scheduler.py <subreddit> <topic> [interval_seconds]   # runs continuously
+python3 hn_ingest.py "<search query>"                                    # one-off pull
+python3 scheduler.py "<search query>" <topic> [interval_seconds]          # runs continuously
+```
+
+**Live Reddit ingestion (needs `.env` credentials and approved API access):**
+
+```bash
+python3 ingest.py <subreddit> [limit]                                         # one-off pull
+python3 scheduler.py <subreddit> <topic> [interval_seconds] reddit             # runs continuously
 ```
 
 **Score a CSV directly (the original script's interface, still available):**
@@ -130,8 +149,9 @@ pytest tests/
 ## Project structure
 
 ```
-ingest.py       # Reddit ingestion + batch-CSV loader
-news.py          # NewsAPI ingestion (second source)
+hn_ingest.py    # Hacker News ingestion (default live source, no credentials needed)
+ingest.py        # Reddit ingestion (needs approved API access) + batch-CSV loader
+news.py           # NewsAPI ingestion (optional third source)
 quality.py        # data quality gate (dedupe/reject/truncate), logs every rejection
 process.py         # sentiment scoring (batched), replaces sentiment.py + sentiment_limited.py
 topics.py           # keyword tagging + spaCy noun-chunk extraction
@@ -147,8 +167,10 @@ tests/                        # pytest coverage for quality/store/alerts/topics
 
 ## Limitations
 
-- Live Reddit/NewsAPI ingestion needs the user's own free API credentials - not runnable live
-  without them, though the Try It tab's batch-CSV path needs nothing
+- Reddit's API moved to a manual-approval registration process partway through this project's
+  build (previously instant); that path is kept and documented but isn't runnable on demand the
+  way Hacker News is - a real external constraint, not a design choice
+- NewsAPI ingestion needs the user's own free API key - not runnable without it
 - Topic tagging is a fixed keyword match or noun chunks, not real aspect-based sentiment analysis
 - The 62.8% ground-truth agreement reflects a domain mismatch (general Twitter vs. gaming/tech
   entities), not a flaw in the pipeline itself - a domain-specific fine-tune would likely do
