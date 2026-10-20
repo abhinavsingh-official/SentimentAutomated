@@ -202,6 +202,62 @@ def dashboard_tab():
         fig2.update_layout(barmode="group", template="plotly_white", height=350, paper_bgcolor="#fffaf5", plot_bgcolor="#fffaf5")
         st.plotly_chart(fig2, use_container_width=True)
 
+    score_map = {"Positive": 1, "Neutral": 0, "Negative": -1}
+    df["score"] = df["sentiment"].map(score_map)
+
+    st.markdown("#### Sentiment over time, by topic")
+    st.markdown(
+        '<p style="color:#7a655d;">Average sentiment score (-1 to 1) per topic, bucketed over '
+        "time - shows whether a topic is trending more positive or negative, not just its "
+        "overall total.</p>",
+        unsafe_allow_html=True,
+    )
+    time_buckets = df["created_at"].dt.floor("10min")
+    pivot = df.assign(bucket=time_buckets).pivot_table(
+        index="topic", columns="bucket", values="score", aggfunc="mean"
+    )
+    if pivot.shape[1] >= 1:
+        # x is given as plain strings, but plotly still auto-detects a date
+        # axis if every label happens to parse as one (these do - they're
+        # formatted timestamps) and switches to continuous date ticking,
+        # which on a near-zero time span renders nonsensical
+        # sub-millisecond tick labels. Forcing a category axis keeps each
+        # bucket as its own discrete column regardless of how tightly
+        # packed the underlying timestamps are.
+        bucket_labels = [str(c) for c in pivot.columns]
+        fig_heat = go.Figure(go.Heatmap(
+            z=pivot.values, x=bucket_labels, y=pivot.index,
+            colorscale=[[0, "#F08080"], [0.5, "#F0E68C"], [1, "#66CDAA"]], zmin=-1, zmax=1,
+        ))
+        fig_heat.update_layout(
+            template="plotly_white", height=300 + 30 * len(pivot.index),
+            paper_bgcolor="#fffaf5", plot_bgcolor="#fffaf5",
+            xaxis_title="Time bucket (10 min)", yaxis_title="Topic",
+        )
+        fig_heat.update_xaxes(type="category")
+        st.plotly_chart(fig_heat, use_container_width=True)
+    else:
+        st.info("Not enough time spread yet to show a sentiment-over-time heatmap.")
+
+    if pivot.shape[0] >= 2 and pivot.shape[1] >= 2:
+        st.markdown("#### Do these topics' sentiment trends move together?")
+        st.markdown(
+            '<p style="color:#7a655d;">Correlation between topics\' sentiment-over-time series - '
+            "close to 1 means two topics trend the same way at the same time (e.g. both dip "
+            "together), close to -1 means they move opposite each other.</p>",
+            unsafe_allow_html=True,
+        )
+        corr = pivot.T.corr()
+        fig_corr = go.Figure(go.Heatmap(
+            z=corr.values, x=corr.columns, y=corr.index,
+            colorscale="RdYlGn", zmin=-1, zmax=1, text=corr.round(2).values, texttemplate="%{text}",
+        ))
+        fig_corr.update_layout(
+            template="plotly_white", height=300 + 30 * len(corr.index),
+            paper_bgcolor="#fffaf5", plot_bgcolor="#fffaf5",
+        )
+        st.plotly_chart(fig_corr, use_container_width=True)
+
     st.markdown("#### What people are actually talking about")
     st.markdown(
         '<p style="color:#7a655d;">Noun phrases pulled straight from stored text - open-ended, '
