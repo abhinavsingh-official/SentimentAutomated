@@ -12,6 +12,7 @@ import store
 from alerts import check_alerts
 from pipeline import run_pipeline
 from process import SentimentModel
+from topics import top_noun_chunks
 
 st.set_page_config(page_title="SentimentAutomated", layout="wide")
 
@@ -201,12 +202,36 @@ def dashboard_tab():
         fig2.update_layout(barmode="group", template="plotly_white", height=350, paper_bgcolor="#fffaf5", plot_bgcolor="#fffaf5")
         st.plotly_chart(fig2, use_container_width=True)
 
+    st.markdown("#### What people are actually talking about")
+    st.markdown(
+        '<p style="color:#7a655d;">Noun phrases pulled straight from stored text - open-ended, '
+        "not limited to the topic labels above.</p>",
+        unsafe_allow_html=True,
+    )
+    chunks = top_noun_chunks(df["text"].tolist(), top_n=15)
+    if chunks:
+        chunk_df = pd.DataFrame(chunks, columns=["phrase", "mentions"])
+        st.bar_chart(chunk_df.set_index("phrase")["mentions"])
+
     st.markdown("#### Recent posts")
     recent = df.sort_values("created_at", ascending=False).head(50)
     st.dataframe(
         recent[["topic", "source", "sentiment", "confidence", "text"]],
         use_container_width=True, hide_index=True,
     )
+
+    rejections = store.recent_rejections(limit=200)
+    if rejections:
+        st.markdown("#### What the quality gate rejected")
+        reject_df = pd.DataFrame(rejections)
+        reason_counts = reject_df["reason"].value_counts()
+        rc1, rc2 = st.columns([1, 2])
+        with rc1:
+            st.dataframe(reason_counts.rename("count"), use_container_width=True)
+        with rc2:
+            fig3 = go.Figure(go.Bar(x=reason_counts.index, y=reason_counts.values, marker_color="#ff6f91"))
+            fig3.update_layout(template="plotly_white", height=280, paper_bgcolor="#fffaf5", plot_bgcolor="#fffaf5")
+            st.plotly_chart(fig3, use_container_width=True)
 
     st.markdown("#### Export")
     if st.button("Generate PDF report"):
