@@ -18,7 +18,9 @@ alerting.
 
 ![Home tab](screenshots/home.png)
 
-**Dashboard** - sentiment by topic, recent posts, and a PDF export:
+**Dashboard** - sentiment by topic, open-ended noun-phrase extraction (what people are actually
+saying, not just the fixed topic labels), what the quality gate rejected and why, and a PDF
+export:
 
 ![Dashboard tab](screenshots/dashboard.png)
 
